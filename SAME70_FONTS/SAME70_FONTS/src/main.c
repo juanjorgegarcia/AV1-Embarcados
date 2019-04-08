@@ -30,7 +30,7 @@ struct ili9488_opt_t g_ili9488_display_opt;
 #define BUT2_PIO				  PIOC
 #define BUT2_PIN				  31
 #define BUT2_PIN_MASK			  (1 << BUT2_PIN)
-#define BUT3s_DEBOUNCING_VALUE  79
+#define BUT2s_DEBOUNCING_VALUE  20
 
 
 
@@ -72,7 +72,8 @@ volatile uint32_t minute = 0;
 volatile uint32_t second = 0;
 
 
-volatile Bool running = false;
+volatile uint8_t running = 1;
+
 
 
 
@@ -105,10 +106,13 @@ void RTT_Handler(void)
 	if ((ul_status & RTT_SR_ALMS) == RTT_SR_ALMS) {
 		pin_toggle(LED_PIO, LED_IDX_MASK);    // BLINK Led
 		f_rtt_alarme = true;                  // flag RTT alarme
-		speed = (float) (((2*3.14*rotations)/4)*sizePneu)*3.6;
-		distance += (float) 2*3.14*sizePneu*rotations;
+		if (running){
+			speed = (float) (((2*3.14*rotations)/4)*sizePneu)*3.6;
+			distance += (float) 2*3.14*sizePneu*rotations;
 
-		rotations = 0;
+			rotations = 0;
+		}
+
 		
 	}
 }
@@ -129,7 +133,7 @@ static void Button1_Handler(uint32_t id, uint32_t mask)
 */
 static void Button2_Handler(uint32_t id, uint32_t mask)
 {
-		running = running ? false : true;
+	running = !running;
 }
 /************************************************************************/
 /* funcoes                                                              */
@@ -141,40 +145,44 @@ void BUT_init(void){
 	/* config. pino botao em modo de entrada */
 	pmc_enable_periph_clk(BUT1_PIO_ID);
 	pio_set_input(BUT1_PIO, BUT1_PIN_MASK, PIO_PULLUP | PIO_DEBOUNCE);
-	
+	pio_set_debounce_filter(BUT1_PIO,BUT1_PIN_MASK,BUT2s_DEBOUNCING_VALUE);
+
 
 	/* config. interrupcao em borda de descida no botao do kit */
 	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
 	pio_enable_interrupt(BUT1_PIO, BUT1_PIN_MASK);
 
 
-	pio_handler_set(BUT1_PIO, BUT1_PIO_ID, BUT1_PIN_MASK, PIO_IT_FALL_EDGE, Button1_Handler);
 
 
 
 	/* habilita interrup?c?o do PIO que controla o botao */
 	/* e configura sua prioridade                        */
 	NVIC_EnableIRQ(BUT1_PIO_ID);
-	NVIC_SetPriority(BUT1_PIO_ID, 1);
+	NVIC_SetPriority(BUT1_PIO_ID, 3);
 	
 	/* config. pino botao em modo de entrada */
 	pmc_enable_periph_clk(BUT2_PIO_ID);
 	pio_set_input(BUT2_PIO, BUT2_PIN_MASK, PIO_PULLUP | PIO_DEBOUNCE);
-		
+	pio_set_debounce_filter(BUT2_PIO,BUT2_PIN_MASK,BUT2s_DEBOUNCING_VALUE);
+
 
 	/* config. interrupcao em borda de descida no botao do kit */
 	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
 	pio_enable_interrupt(BUT2_PIO, BUT2_PIN_MASK);
 
 
-	pio_handler_set(BUT2_PIO, BUT2_PIO_ID, BUT2_PIN_MASK, PIO_IT_FALL_EDGE, Button2_Handler);
 
 
 
 	/* habilita interrup?c?o do PIO que controla o botao */
 	/* e configura sua prioridade                        */
 	NVIC_EnableIRQ(BUT2_PIO_ID);
-	NVIC_SetPriority(BUT2_PIO_ID, 1);
+	NVIC_SetPriority(BUT2_PIO_ID, 3);
+	pio_handler_set(BUT1_PIO, BUT1_PIO_ID, BUT1_PIN_MASK, PIO_IT_FALL_EDGE, Button1_Handler);
+
+	pio_handler_set(BUT2_PIO, BUT2_PIO_ID, BUT2_PIN_MASK, PIO_IT_FALL_EDGE, Button2_Handler);
+
 
 };
 
@@ -268,11 +276,11 @@ void draw_display() {
 	sprintf(minutes_buffer,"%d",minute);
 	char seconds_buffer[32];
 	sprintf(seconds_buffer,"%d",second);
-	font_draw_text(&calibri_36, "horas", 50, 200, 2);
+	font_draw_text(&calibri_36, "Horas:", 50, 200, 2);
 	font_draw_text(&calibri_36, hours_buffer, 50, 250, 2);
-	font_draw_text(&calibri_36, "minutos", 50, 300, 2);
+	font_draw_text(&calibri_36, "Minutos:", 50, 300, 2);
 	font_draw_text(&calibri_36, minutes_buffer, 50, 350, 2);
-	font_draw_text(&calibri_36, "segundos", 50, 400, 2);
+	font_draw_text(&calibri_36, "Segundos:", 50, 400, 2);
 	font_draw_text(&calibri_36, seconds_buffer, 50, 450, 2);
 		
 }
@@ -322,9 +330,9 @@ void RTC_Handler(void)
 	/* Time or date alarm */
 	if ((ul_status & RTC_SR_ALARM) == RTC_SR_ALARM) {
 			rtc_clear_status(RTC, RTC_SCCR_ALRCLR);
+ 			rtc_get_time(RTC,&hour,&minute,&second);
 
 			if (running){
- 			rtc_get_time(RTC,&hour,&minute,&second);
 			
 
  			if (second >= 59){
@@ -343,8 +351,11 @@ void RTC_Handler(void)
 			minute -= MINUTE;
 			second -= SECOND;
 
-			configure_lcd();
+
 		 }
+		 configure_lcd();
+
+
 
 
 
@@ -385,6 +396,9 @@ int main(void) {
 	
 	rotations = 0;
 	distance = 0;
+	second = 0;
+	running = 1;
+
 	// super loop
 	// aplicacoes embarcadas não devem sair do while(1).
   while (1){
