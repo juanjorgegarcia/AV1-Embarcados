@@ -50,7 +50,7 @@ struct ili9488_opt_t g_ili9488_display_opt;
 
 
 
-#define sizePneu 325 // raio do pneu em cm;
+#define sizePneu 0.325 // raio do pneu em cm;
 
 /************************************************************************/
 /* constants                                                            */
@@ -63,6 +63,20 @@ volatile Bool f_rtt_alarme = false;
 
 volatile uint32_t rotations = 0;
 
+volatile uint32_t speed = 0;
+
+volatile uint32_t distance = 0;
+
+volatile uint32_t hour = 0;
+volatile uint32_t minute = 0;
+volatile uint32_t second = 0;
+
+
+volatile Bool running = false;
+
+
+
+
 
 /************************************************************************/
 /* prototypes                                                           */
@@ -70,6 +84,8 @@ volatile uint32_t rotations = 0;
 void pin_toggle(Pio *pio, uint32_t mask);
 void io_init(void);
 static void RTT_init(uint16_t pllPreScale, uint32_t IrqNPulses);
+void configure_lcd(void);
+
 
 /************************************************************************/
 /* interrupcoes                                                         */
@@ -89,6 +105,10 @@ void RTT_Handler(void)
 	if ((ul_status & RTT_SR_ALMS) == RTT_SR_ALMS) {
 		pin_toggle(LED_PIO, LED_IDX_MASK);    // BLINK Led
 		f_rtt_alarme = true;                  // flag RTT alarme
+		speed = (float) (((2*3.14*rotations)/4)*sizePneu)*3.6;
+		distance += (float) 2*3.14*sizePneu*rotations;
+
+		rotations = 0;
 		
 	}
 }
@@ -98,8 +118,18 @@ void RTT_Handler(void)
 */
 static void Button1_Handler(uint32_t id, uint32_t mask)
 {
-	rotations+=1;
+	if(running){
+		rotations+=1;
+	}
 
+}
+
+/**
+*  Handle Interrupcao botao 1
+*/
+static void Button2_Handler(uint32_t id, uint32_t mask)
+{
+		running = running ? false : true;
 }
 /************************************************************************/
 /* funcoes                                                              */
@@ -126,6 +156,25 @@ void BUT_init(void){
 	/* e configura sua prioridade                        */
 	NVIC_EnableIRQ(BUT1_PIO_ID);
 	NVIC_SetPriority(BUT1_PIO_ID, 1);
+	
+	/* config. pino botao em modo de entrada */
+	pmc_enable_periph_clk(BUT2_PIO_ID);
+	pio_set_input(BUT2_PIO, BUT2_PIN_MASK, PIO_PULLUP | PIO_DEBOUNCE);
+		
+
+	/* config. interrupcao em borda de descida no botao do kit */
+	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
+	pio_enable_interrupt(BUT2_PIO, BUT2_PIN_MASK);
+
+
+	pio_handler_set(BUT2_PIO, BUT2_PIO_ID, BUT2_PIN_MASK, PIO_IT_FALL_EDGE, Button2_Handler);
+
+
+
+	/* habilita interrup?c?o do PIO que controla o botao */
+	/* e configura sua prioridade                        */
+	NVIC_EnableIRQ(BUT2_PIO_ID);
+	NVIC_SetPriority(BUT2_PIO_ID, 1);
 
 };
 
@@ -197,6 +246,37 @@ void font_draw_text(tFont *font, const char *text, int x, int y, int spacing) {
 	}	
 }
 
+void draw_display() {
+	      /*
+       * CLEAR FLAG
+       */
+	
+
+	font_draw_text(&calibri_36, "Velocidade:", 50, 0, 1);
+	char speed_buffer[32];
+	sprintf(speed_buffer,"%d",speed);
+	font_draw_text(&calibri_36, speed_buffer, 50, 50, 1);
+	font_draw_text(&calibri_36, "Distancia:", 50, 100, 1);
+
+	char distance_buffer[32];
+	sprintf(distance_buffer,"%d",distance);
+	font_draw_text(&calibri_36, distance_buffer, 50, 150, 2);
+	
+	char hours_buffer[32];
+	sprintf(hours_buffer,"%d",hour);
+	char minutes_buffer[32];
+	sprintf(minutes_buffer,"%d",minute);
+	char seconds_buffer[32];
+	sprintf(seconds_buffer,"%d",second);
+	font_draw_text(&calibri_36, "horas", 50, 200, 2);
+	font_draw_text(&calibri_36, hours_buffer, 50, 250, 2);
+	font_draw_text(&calibri_36, "minutos", 50, 300, 2);
+	font_draw_text(&calibri_36, minutes_buffer, 50, 350, 2);
+	font_draw_text(&calibri_36, "segundos", 50, 400, 2);
+	font_draw_text(&calibri_36, seconds_buffer, 50, 450, 2);
+		
+}
+
 /**
 * Configura o RTC para funcionar com interrupcao de alarme
 */
@@ -222,15 +302,70 @@ void RTC_init(){
 
 }
 
+
+/**
+* \brief Interrupt handler for the RTC. Refresh the display.
+*/
+void RTC_Handler(void)
+{
+	uint32_t ul_status = rtc_get_status(RTC);
+
+	/*
+	*  Verifica por qual motivo entrou
+	*  na interrupcao, se foi por segundo
+	*  ou Alarm
+	*/
+	if ((ul_status & RTC_SR_SEC) == RTC_SR_SEC) {
+		rtc_clear_status(RTC, RTC_SCCR_SECCLR);
+	}
+	
+	/* Time or date alarm */
+	if ((ul_status & RTC_SR_ALARM) == RTC_SR_ALARM) {
+			rtc_clear_status(RTC, RTC_SCCR_ALRCLR);
+
+			if (running){
+ 			rtc_get_time(RTC,&hour,&minute,&second);
+			
+
+ 			if (second >= 59){
+	 			minute += 1;
+	 			second = 0;
+	 			}else{
+	 			second += 1;
+ 			}
+			if(minute>=59){
+				hour+=1;
+				minute=0;
+			}
+
+ 			rtc_set_time_alarm(RTC, 1, hour, 1, minute, 1, second);
+			hour -= HOUR;
+			minute -= MINUTE;
+			second -= SECOND;
+
+			configure_lcd();
+		 }
+
+
+
+	}
+	
+	
+	rtc_clear_status(RTC, RTC_SCCR_ACKCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TIMCLR);
+	rtc_clear_status(RTC, RTC_SCCR_CALCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TDERRCLR);
+	
+}
+
 int main(void) {
 	board_init();
 	sysclk_init();	
-	configure_lcd();
 	
 	//font_draw_text(&sourcecodepro_28, "TEST", 50, 50, 1);
 
-	font_draw_text(&calibri_36, "Oi Mundo! #$!@", 50, 100, 1);
-	font_draw_text(&arial_72, "102456", 50, 200, 2);
+	//font_draw_text(&calibri_36, "Oi Mundo! #$!@", 50, 100, 1);
+	//font_draw_text(&arial_72, "102456", 50, 200, 2);
 	
 	// Desliga watchdog
 	WDT->WDT_MR = WDT_MR_WDDIS;
@@ -240,13 +375,18 @@ int main(void) {
 	
 	/* Configura os bot?es */
 	BUT_init();
-		
+	
+	RTC_init();
+
+	rtc_set_date_alarm(RTC, 1, MOUNTH, 1, DAY);
+	rtc_set_time_alarm(RTC, 1, HOUR, 1, MINUTE, 1, SECOND+1);	
 	// Inicializa RTT com IRQ no alarme.
 	f_rtt_alarme = true;
-		
+	
+	rotations = 0;
+	distance = 0;
 	// super loop
 	// aplicacoes embarcadas não devem sair do while(1).
-  // aplicacoes embarcadas não devem sair do while(1).
   while (1){
     if (f_rtt_alarme){
       
@@ -280,15 +420,14 @@ int main(void) {
       *   rtt_read_timer_value()
       */
       
-      /*
-       * CLEAR FLAG
-       */
-	  	char buffer[32];
-	  	sprintf(buffer,"%d",rotations);
-	  	font_draw_text(&calibri_36, buffer, 50, 50, 1);
-
+		
       f_rtt_alarme = false;
 	  
     }
+	
+	draw_display();
+	pmc_sleep(SAM_PM_SMODE_SLEEP_WFI);
+
+
   }  
 }
